@@ -71,13 +71,12 @@ npx serve .
 
 ## Install
 
-Until the package is on npm, install straight from the repo:
-
 ```
-npm install github:LiquiHog/hogswap-js-sdk
+npm install hogswap-js-sdk
 ```
 
-or vendor `src/` — it's dependency-free ES modules.
+Installing from the repo (`npm install github:LiquiHog/hogswap-js-sdk`)
+also works, or vendor `src/` — it's dependency-free ES modules.
 
 ## What you can quote
 
