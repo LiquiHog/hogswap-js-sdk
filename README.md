@@ -97,12 +97,16 @@ Market data (all edge-cached ~5s): `assets`, `asset`, `assetPools`, `pools`,
 `tvl`, `health`.
 
 **Live block stream** — the one endpoint without a wrapper method: it's
-Server-Sent Events, which the platform already speaks natively:
+plain Server-Sent Events:
 
 ```js
 const es = new EventSource("https://hogswap-v1.liquihog.dev/stream/blocks");
 es.onmessage = (e) => console.log("block:", JSON.parse(e.data));
 ```
+
+`EventSource` is built into every browser. In Node it's still
+experimental — run with `node --experimental-eventsource` (v22+) or
+use any SSE client package.
 
 Full request/response reference: [`docs/API.md`](docs/API.md).
 
