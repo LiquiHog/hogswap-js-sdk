@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HOGSWAP SDK — example</title>
+<style>
+  :root {
+    --bg: #0e1116; --card: #171c24; --line: #262d38; --text: #e8ecf1;
+    --dim: #8b95a5; --accent: #4ade80; --accent-dark: #16a34a; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+  }
+  h1 { font-size: 22px; margin: 0; }
+  h1 small { color: var(--dim); font-weight: 400; font-size: 14px; margin-left: 8px; }
+  .card {
+    width: 100%; max-width: 460px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px; padding: 18px;
+  }
+  label { display: block; font-size: 12px; color: var(--dim); margin: 10px 0 4px; }
+  select, input {
+    width: 100%; padding: 10px 12px; border-radius: 9px; font-size: 15px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+  }
+  input:focus, select:focus { outline: 1px solid var(--accent-dark); }
+  button {
+    width: 100%; margin-top: 14px; padding: 12px; border: 0; border-radius: 9px;
+    font-size: 15px; font-weight: 600; cursor: pointer;
+    background: var(--accent-dark); color: white;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.secondary { background: var(--line); }
+  .row { display: flex; gap: 10px; } .row > div { flex: 1; }
+  .result div { display: flex; justify-content: space-between; padding: 3px 0; }
+  .result .k { color: var(--dim); }
+  .big { font-size: 20px; font-weight: 700; color: var(--accent); }
+  .legs { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .leg {
+    font-size: 12px; padding: 3px 9px; border-radius: 99px;
+    background: var(--bg); border: 1px solid var(--line); color: var(--dim);
+  }
+  .status { min-height: 20px; font-size: 13px; color: var(--dim); margin-top: 10px; word-break: break-all; }
+  .status.err { color: var(--err); }
+  .status.ok { color: var(--accent); }
+  .addr { font-family: ui-monospace, monospace; font-size: 12px; color: var(--dim); }
+  footer { color: var(--dim); font-size: 12px; max-width: 460px; text-align: center; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>HOGSWAP <small>SDK example — quote &amp; swap on Algorand</small></h1>
+
+<div class="card">
+  <div class="row">
+    <div>
+      <label>You pay</label>
+      <select id="assetIn"></select>
+    </div>
+    <div>
+      <label>You receive</label>
+      <select id="assetOut"></select>
+    </div>
+  </div>
+  <label>Amount</label>
+  <input id="amount" inputmode="decimal" placeholder="10" autocomplete="off">
+  <div id="quoteBox" class="result" style="display:none; margin-top:14px">
+    <div><span class="k">Expected</span><span class="big" id="qExpected"></span></div>
+    <div><span class="k">Minimum (on-chain floor)</span><span id="qMin"></span></div>
+    <div><span class="k">Network fee</span><span id="qFee"></span></div>
+    <div class="legs" id="qLegs"></div>
+  </div>
+  <div id="quoteStatus" class="status"></div>
+</div>
+
+<div class="card">
+  <button id="connectBtn" class="secondary">Connect Pera Wallet</button>
+  <div id="walletAddr" class="addr" style="margin-top:8px"></div>
+  <button id="swapBtn" disabled>Swap</button>
+  <div id="swapStatus" class="status"></div>
+</div>
+
+<footer>
+  Quotes include the routing fee — what you see is what the contract
+  delivers. Connect a wallet and quotes also price its HOG fee
+  discount. Rate limit: 30 quotes / 10s. Unsigned transactions are
+  signed locally by your wallet and submitted to a public algod node —
+  this page never sees your keys.
+  <br><a href="../docs/API.md">API reference</a>
+</footer>
+
+<script type="module">
+import { HogswapClient, toBaseUnits, fromBaseUnits, RateLimitError }
+  from "../src/index.js";
+
+const hogswap = new HogswapClient();
+const $ = (id) => document.getElementById(id);
+// Escape API-derived strings before innerHTML: asset unit names are
+// creator-controlled on Algorand. (This page is copy-paste bait —
+// ship the safe pattern.)
+const esc = (s) => String(s).replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// ── assets ─────────────────────────────────────────────────────────
+// Populated from the API — never hardcode asset ids. Falls back to
+// price anchors if the full list is unavailable.
+const DECIMALS = new Map([[0, 6]]);
+const NAMES = new Map([[0, "ALGO"]]);
+
+async function loadAssets() {
+  let list = [];
+  try {
+    const r = await hogswap.assets({ limit: 200 });
+    list = (r.assets ?? []).filter((a) => a.unit_name && a.price_algo_micro);
+  } catch { /* fall through */ }
+  if (!list.length) {
+    try {
+      const anchors = await hogswap.priceAnchors();
+      list = (anchors.anchors ?? anchors.assets ?? []).map((a) => ({
+        asset_id: a.asset_id ?? a, unit_name: a.unit_name ?? String(a.asset_id ?? a),
+        decimals: a.decimals ?? 6,
+      }));
+    } catch { /* keep ALGO-only */ }
+  }
+  for (const a of list) {
+    DECIMALS.set(a.asset_id, a.decimals ?? 6);
+    NAMES.set(a.asset_id, a.unit_name ?? String(a.asset_id));
+  }
+  const ids = [0, ...list.map((a) => a.asset_id).filter((id) => id !== 0)];
+  for (const sel of [$("assetIn"), $("assetOut")]) {
+    sel.innerHTML = ids.map((id) =>
+      `<option value="${id}">${esc(NAMES.get(id))}</option>`).join("");
+  }
+  $("assetIn").value = "0";
+  $("assetOut").value = String(ids.find((id) => id !== 0) ?? 0);
+}
+
+// ── quoting (debounced type-to-quote) ──────────────────────────────
+let lastQuote = null;
+let debounceTimer = null;
+let quoteSeq = 0;   // stale-response guard: only the newest request may render
+
+function scheduleQuote() { clearTimeout(debounceTimer); debounceTimer = setTimeout(quoteNow, 350); }
+
+async function quoteNow() {
+  // Claim the sequence FIRST: even early exits (cleared input, same
+  // asset both sides, bad amount) must invalidate any in-flight
+  // request, or its late response re-renders a quote for input the
+  // user no longer has — and re-arms the Swap button with it.
+  const seq = ++quoteSeq;
+  const assetIn = Number($("assetIn").value);
+  const assetOut = Number($("assetOut").value);
+  const human = $("amount").value.trim();
+  lastQuote = null; $("swapBtn").disabled = true;
+  if (!human || assetIn === assetOut) { $("quoteBox").style.display = "none"; return; }
+
+  let amountIn;
+  try { amountIn = toBaseUnits(human, DECIMALS.get(assetIn) ?? 6); }
+  catch {
+    $("quoteBox").style.display = "none";
+    setStatus("quoteStatus", "enter a valid amount", "err");
+    return;
+  }
+  if (amountIn <= 0n) { $("quoteBox").style.display = "none"; return; }
+
+  setStatus("quoteStatus", "quoting…");
+  try {
+    const q = await hogswap.swapQuote({
+      assetIn, assetOut, amountIn, slippageBps: 50,
+      sender: wallet.address ?? undefined,
+    });
+    if (seq !== quoteSeq) return;   // a newer request superseded this one
+    lastQuote = q;
+    const dOut = DECIMALS.get(assetOut) ?? 6;
+    $("qExpected").textContent = `${fromBaseUnits(q.expected_out, dOut)} ${NAMES.get(assetOut)}`;
+    $("qMin").textContent = `${fromBaseUnits(q.min_out_at_slippage, dOut)} ${NAMES.get(assetOut)}`;
+    $("qFee").textContent = `${fromBaseUnits(q.network_fee_microalgo, 6)} ALGO`;
+    $("qLegs").innerHTML = q.legs.map((l) => `<span class="leg">${esc(l.dex_name)}</span>`).join("");
+    $("quoteBox").style.display = "block";
+    setStatus("quoteStatus", "");
+    $("swapBtn").disabled = !wallet.address;
+  } catch (e) {
+    if (seq !== quoteSeq) return;
+    $("quoteBox").style.display = "none";
+    setStatus("quoteStatus",
+      e instanceof RateLimitError ? `rate limited — retry in ~${e.retryAfterSeconds}s` : e.message,
+      "err");
+  }
+}
+
+// ── wallet (Pera) + swap ───────────────────────────────────────────
+// Loaded lazily from a CDN so the quoting demo works even offline
+// from these libraries. Any Algorand wallet works the same way.
+const wallet = { pera: null, address: null, algosdk: null };
+
+async function walletLibs() {
+  if (!wallet.algosdk) {
+    wallet.algosdk = await import("https://esm.sh/algosdk@2.9.0?bundle");
+  }
+  if (!wallet.pera) {
+    const mod = await import("https://esm.sh/@perawallet/connect@1.3.5?bundle");
+    wallet.pera = new mod.PeraWalletConnect();
+  }
+  return wallet;
+}
+
+$("connectBtn").onclick = async () => {
+  try {
+    if (wallet.address) {           // disconnect
+      await wallet.pera?.disconnect();
+      wallet.address = null;
+      $("walletAddr").textContent = "";
+      $("connectBtn").textContent = "Connect Pera Wallet";
+      $("swapBtn").disabled = true;
+      return;
+    }
+    setStatus("swapStatus", "opening Pera…");
+    const { pera } = await walletLibs();
+    const accounts = await pera.connect();
+    wallet.address = accounts[0];
+    hogswap.setSender(wallet.address);
+    $("walletAddr").textContent = wallet.address;
+    $("connectBtn").textContent = "Disconnect";
+    $("swapBtn").disabled = !lastQuote;
+    setStatus("swapStatus", "connected — quotes now price your HOG discount", "ok");
+    if (lastQuote) quoteNow();      // re-quote sender-aware
+  } catch (e) {
+    setStatus("swapStatus", `wallet: ${e.message}`, "err");
+  }
+};
+
+$("swapBtn").onclick = async () => {
+  if (!lastQuote || !wallet.address) return;
+  const btn = $("swapBtn");
+  btn.disabled = true;
+  try {
+    setStatus("swapStatus", "building transactions…");
+    const { txnsB64 } = await hogswap.execute({
+      quoteId: lastQuote.quote_id, userAddress: wallet.address,
+    });
+
+    const { algosdk, pera } = await walletLibs();
+    const unsigned = txnsB64.map((b64) =>
+      algosdk.decodeUnsignedTransaction(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
+
+    setStatus("swapStatus", "waiting for wallet signature…");
+    const signed = await pera.signTransaction([unsigned.map((txn) => ({ txn }))]);
+
+    setStatus("swapStatus", "submitting…");
+    const algod = new algosdk.Algodv2("", "https://mainnet-api.algonode.cloud", "");
+    const { txId } = await algod.sendRawTransaction(signed).do();
+    await algosdk.waitForConfirmation(algod, txId, 4);
+    setStatus("swapStatus", `confirmed ✓  ${txId}`, "ok");
+  } catch (e) {
+    setStatus("swapStatus", e?.message ?? String(e), "err");
+  } finally {
+    btn.disabled = !lastQuote;
+  }
+};
+
+// ── glue ───────────────────────────────────────────────────────────
+function setStatus(id, text, cls = "") { const el = $(id); el.textContent = text; el.className = `status ${cls}`; }
+$("amount").addEventListener("input", scheduleQuote);
+$("assetIn").addEventListener("change", quoteNow);
+$("assetOut").addEventListener("change", quoteNow);
+loadAssets();
+</script>
+</body>
+</html>

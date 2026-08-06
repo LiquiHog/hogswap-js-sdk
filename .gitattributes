@@ -1,0 +1,5 @@
+# Normalize line endings: LF in the repo, regardless of contributor OS.
+# Committed before the first push so history never contains CRLF churn.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

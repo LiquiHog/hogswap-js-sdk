@@ -1,0 +1,51 @@
+{
+  "name": "hogswap-js-sdk",
+  "version": "1.0.0",
+  "description": "Official JavaScript SDK for the HOGSWAP v1 router API \u2014 multi-DEX swap quotes, LP flows, and market data on Algorand.",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "types",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "example:node": "node examples/node-quote.mjs",
+    "example:web": "npx serve .",
+    "test": "node --test"
+  },
+  "keywords": [
+    "algorand",
+    "dex",
+    "swap",
+    "aggregator",
+    "defi",
+    "hogswap",
+    "liquihog",
+    "stamm"
+  ],
+  "author": "LiquiHog",
+  "license": "MIT",
+  "homepage": "https://github.com/LiquiHog/hogswap-js-sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LiquiHog/hogswap-js-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/LiquiHog/hogswap-js-sdk/issues"
+  },
+  "sideEffects": false
+}
