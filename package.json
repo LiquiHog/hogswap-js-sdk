@@ -1,7 +1,7 @@
 {
   "name": "hogswap-js-sdk",
   "version": "1.1.0",
-  "description": "Official JavaScript SDK for the HOGSWAP v1 router API \u2014 multi-DEX swap quotes, LP flows, market data, and x402 payments (pay any Algorand invoice with any asset) on Algorand.",
+  "description": "Official JavaScript SDK for the HOGSWAP v1 router API — multi-DEX swap quotes, LP flows, market data, and x402 payments (pay any Algorand invoice with any asset) on Algorand.",
   "type": "module",
   "main": "./src/index.js",
   "module": "./src/index.js",
@@ -42,7 +42,7 @@
   "homepage": "https://github.com/LiquiHog/hogswap-js-sdk#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/LiquiHog/hogswap-js-sdk"
+    "url": "git+https://github.com/LiquiHog/hogswap-js-sdk.git"
   },
   "bugs": {
     "url": "https://github.com/LiquiHog/hogswap-js-sdk/issues"
