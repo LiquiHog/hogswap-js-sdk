@@ -154,3 +154,47 @@ the connected account (they all are).
 Prices: `price_algo_micro` = µALGO per whole unit; `price_usd_micro` =
 µUSD per whole unit; `price_confidence_bps` 0-10000, higher = more
 reliable.
+
+## Batch lookups (1.1.0)
+
+| Endpoint | SDK method | Notes |
+|---|---|---|
+| `GET /assets?ids=1,2` | `assets({ ids })` | up to 100 ids, order-preserving, unknown ids omitted |
+| `GET /prices?ids=1,2` | `prices(ids)` | batch price lookup |
+| `GET /tvl/assets?ids=1,2` | `assetsTvl(ids)` | per-asset TVL summaries |
+
+## x402 — paid tier + universal payment rail (1.1.0)
+
+Free anonymous quotes never change. Presenting an `X-API-Key`
+(`apiKey` client option) opts into the credit tier; out of credits,
+the API answers **HTTP 402** whose body is an x402 offer — the SDK
+throws `PaymentRequiredError` with the offer attached.
+
+| Endpoint | SDK method | Notes |
+|---|---|---|
+| `POST /credits/register` | `register({ address })` | challenge to sign — zero-human key issuance |
+| `POST /credits/register/verify` | `registerVerify({...})` | returns `api_key` ONCE |
+| `GET /credits/balance` | `creditBalance()` | balance + per-endpoint weights |
+| `POST /credits/topup` | `creditOffer({ usdcMicro })` | returns the 402 offer (`accepts`, `nonce`, `credits_granted`) |
+| `POST /credits/topup/build` | `topupBuild({...})` | unsigned groups paying a pending top-up with any 1-4 assets |
+| `GET /pay/x402/assets` | `payableAssets()` | accepted payment inputs (confidence-gated) |
+| `POST /pay/x402/build` | `payX402Build({...})` | unsigned groups paying ANY Algorand x402 invoice |
+
+**Group semantics (both build endpoints):** the response is
+`groups[]` — usually `swap` then `payment` (or a single `payment` in
+`direct` mode when you already hold the demanded asset). Sign every
+transaction in one pass, then **submit the groups in order**: the
+swap is floor-gated on-chain at the payment amount, so the payment is
+funded by construction; if the payment group somehow fails you keep
+the swapped asset and can resubmit it. Overshoot above the payment
+stays with the payer.
+
+**Orchestrators:** `payInvoice({ invoice, userAddress, inputs, sign,
+submit })` and `topupWithAssets({ usdcMicro, ..., sign, submit })`
+run build -> sign -> submit per group in order (top-ups also poll
+until credits land, ~1 block). `sign(txnsB64, purpose)` and
+`submit(signed, purpose)` are YOUR callbacks — the SDK is strictly
+non-custodial and never sees keys. Never pass a mnemonic anywhere.
+
+EVM-settled invoices are rejected with HTTP 400 (no bridge; Algorand
+-settled x402 only).

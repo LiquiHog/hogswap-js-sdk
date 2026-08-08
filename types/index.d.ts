@@ -6,6 +6,7 @@
 
 export declare const DEFAULT_BASE_URL: string;
 export declare const ALGO: 0;
+export declare const USDC: 31566704;
 export declare const LIMITS: Readonly<{
   QUOTE_RATE_LIMIT: Readonly<{ requests: number; windowSeconds: number }>;
   EXECUTE_BUDGET_PER_QUOTE: number;
@@ -30,6 +31,58 @@ export declare class ValidationError extends HogswapError {}
 export declare class NoRouteError extends HogswapError {}
 export declare class NotFoundError extends HogswapError {}
 export declare class ApiError extends HogswapError {}
+export declare class PaymentRequiredError extends HogswapError {
+  /** The x402 offer body (`x402_version`, `accepts`, ...). */
+  offer: X402Offer | null;
+}
+
+// ── x402 shapes ─────────────────────────────────────────────────────
+
+export interface X402AcceptsEntry {
+  scheme: string;
+  network: string;
+  asset: number | string;
+  amount: string | number;
+  pay_to: string;
+  /** Invoice nonce — keep it; it rides the payment txn note. */
+  note?: string;
+  expires_unix?: number;
+  [key: string]: unknown;
+}
+
+export interface X402Offer {
+  x402_version: number;
+  accepts: X402AcceptsEntry[];
+  /** Credit top-up offers only. */
+  nonce?: string;
+  credits_granted?: number;
+  [key: string]: unknown;
+}
+
+export interface PayInput { assetId: number; amount?: number | bigint; }
+
+export interface UnsignedGroup {
+  /** "swap" (submit first) or "payment". */
+  purpose: string;
+  /** Base64 msgpack unsigned transactions, in group order. */
+  txnsB64: string[];
+}
+
+export interface PayBuildResult {
+  /** "direct" (single payment txn) or "swap+pay" (two groups). */
+  mode: string | null;
+  atomic: boolean;
+  /** Sign everything, then submit groups IN ORDER. */
+  groups: UnsignedGroup[];
+  raw: Record<string, unknown>;
+}
+
+/** Sign one group's unsigned txns; return whatever `submit` accepts. */
+export type SignGroupFn = (txnsB64: string[], purpose: string) => unknown | Promise<unknown>;
+/** Broadcast one signed group (and ideally wait for confirmation). */
+export type SubmitGroupFn = (signed: unknown, purpose: string) => unknown | Promise<unknown>;
+
+export interface GroupReceipt { purpose: string; result: unknown; }
 
 // ── wire shapes (partial but stable) ───────────────────────────────
 
@@ -98,14 +151,18 @@ export interface AmountEntry { assetId: number; amount: number | bigint; }
 export interface HogswapClientOptions {
   baseUrl?: string;
   sender?: string | null;
+  /** `hsk_` bearer key for the paid tier (X-API-Key header). */
+  apiKey?: string | null;
   fetch?: typeof fetch;
 }
 
 export declare class HogswapClient {
   baseUrl: string;
   sender: string | null;
+  apiKey: string | null;
   constructor(opts?: HogswapClientOptions);
   setSender(address: string | null): this;
+  setApiKey(key: string | null): this;
 
   swapQuote(p: {
     assetIn: number; assetOut: number; amountIn: number | bigint;
@@ -149,10 +206,32 @@ export declare class HogswapClient {
     coverAlgoFee?: boolean;
   }): Promise<{ quote: QuoteResponse; txnsB64: string[]; groupId: string | null }>;
 
+  // ── x402: credits + the universal pay rail ──
+  register(p: { address: string }): Promise<Record<string, unknown>>;
+  registerVerify(p: { address: string; challenge: string; signatureB64: string }):
+    Promise<{ api_key: string; address: string; [key: string]: unknown }>;
+  creditBalance(): Promise<{ balance: number; [key: string]: unknown }>;
+  creditOffer(p: { usdcMicro: number | bigint }): Promise<X402Offer>;
+  payableAssets(): Promise<{ count: number; min_confidence_bps: number;
+    assets: { asset_id: number; price_confidence_bps: number | null }[] }>;
+  payX402Build(p: { invoice: X402AcceptsEntry; userAddress: string;
+    inputs: PayInput[] }): Promise<PayBuildResult>;
+  topupBuild(p: { nonce: string; userAddress: string;
+    inputs: PayInput[] }): Promise<PayBuildResult>;
+  payInvoice(p: { invoice: X402AcceptsEntry; userAddress: string;
+    inputs: PayInput[]; sign: SignGroupFn; submit: SubmitGroupFn }):
+    Promise<PayBuildResult & { receipts: GroupReceipt[] }>;
+  topupWithAssets(p: { usdcMicro: number | bigint; userAddress: string;
+    inputs: PayInput[]; sign: SignGroupFn; submit: SubmitGroupFn;
+    waitForCredits?: boolean; timeoutMs?: number; pollMs?: number }):
+    Promise<{ offer: X402Offer; receipts: GroupReceipt[]; balance: number | null }>;
+
   health(): Promise<Record<string, unknown>>;
-  assets(p?: { limit?: number; cursor?: string; q?: string }):
+  assets(p?: { limit?: number; cursor?: string; q?: string; ids?: number[] }):
     Promise<{ assets: AssetInfo[]; next_cursor: string | null; as_of_round: number }>;
   asset(assetId: number): Promise<AssetInfo>;
+  prices(ids: number[]): Promise<Record<string, unknown>>;
+  assetsTvl(ids: number[]): Promise<Record<string, unknown>>;
   assetPools(assetId: number, p?: { kind?: number; minTvlAlgoMicro?: number }): Promise<Record<string, unknown>>;
   pools(params?: Record<string, unknown>): Promise<Record<string, unknown>>;
   pool(poolId: number): Promise<Record<string, unknown>>;

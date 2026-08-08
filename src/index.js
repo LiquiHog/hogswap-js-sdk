@@ -7,12 +7,13 @@
  */
 
 export { HogswapClient } from "./client.js";
-export { DEFAULT_BASE_URL, ALGO, LIMITS } from "./constants.js";
+export { DEFAULT_BASE_URL, ALGO, USDC, LIMITS } from "./constants.js";
 export { toBaseUnits, fromBaseUnits } from "./utils.js";
 export {
   HogswapError,
   NetworkError,
   RateLimitError,
+  PaymentRequiredError,
   QuoteExpiredError,
   ExecuteBudgetError,
   ValidationError,

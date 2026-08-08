@@ -8,6 +8,9 @@ export const DEFAULT_BASE_URL = "https://hogswap-v1.liquihog.dev";
 /** ALGO's asset id on Algorand (protocol-level constant). */
 export const ALGO = 0;
 
+/** Mainnet USDC's asset id — the x402 credit tier's unit of account. */
+export const USDC = 31566704;
+
 /**
  * Server-side limits (documented so integrators can design for them —
  * they are enforced by the API, not by this SDK):

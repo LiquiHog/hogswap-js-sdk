@@ -184,3 +184,141 @@ test("swap() prices the quote for userAddress even if sender is passed", async (
   const quoteBody = JSON.parse(calls[0].init.body);
   assert.equal(quoteBody.sender, "USERADDR");
 });
+
+// ── x402: credits + universal pay rail (1.1.0) ─────────────────────
+
+import { PaymentRequiredError, ValidationError as VErr } from "../src/index.js";
+
+const ADDR = "A".repeat(58);
+const OFFER = {
+  x402_version: 1,
+  accepts: [{ scheme: "algorand-exact", network: "algorand-mainnet",
+              asset: 31566704, amount: "1000000", pay_to: "T".repeat(58),
+              note: "nonce-1" }],
+  nonce: "nonce-1", credits_granted: 1000,
+};
+const BUILD = {
+  mode: "swap+pay", atomic: false, n_txns: 3,
+  groups: [
+    { purpose: "swap", txns: [{ txn_b64: "AA" }, { txn_b64: "BB" }] },
+    { purpose: "payment", txns: [{ txn_b64: "CC" }] },
+  ],
+};
+
+/** Sequenced stub: each call consumes the next {status, body}. */
+function seqClient(responses, opts = {}) {
+  const calls = [];
+  const client = new HogswapClient({
+    ...opts,
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      const { status, body } = responses[Math.min(calls.length - 1, responses.length - 1)];
+      return {
+        ok: status >= 200 && status < 300, status,
+        headers: { get: () => null },
+        json: async () => body,
+      };
+    },
+  });
+  return { client, calls };
+}
+
+test("402 responses throw PaymentRequiredError carrying the offer", async () => {
+  const { client } = stubClient(402, OFFER);
+  await assert.rejects(
+    client.swapQuote({ assetIn: 0, assetOut: 1, amountIn: 5 }),
+    (e) => e instanceof PaymentRequiredError &&
+           e.offer?.accepts?.[0]?.note === "nonce-1");
+});
+
+test("creditOffer unwraps the 402 into the offer", async () => {
+  const { client, calls } = stubClient(402, OFFER);
+  const offer = await client.creditOffer({ usdcMicro: 1_000_000 });
+  assert.equal(offer.nonce, "nonce-1");
+  assert.equal(JSON.parse(calls[0].init.body).usdc_micro, 1_000_000);
+});
+
+test("apiKey rides every request as X-API-Key", async () => {
+  const { client, calls } = stubClient(200, { balance: 7 });
+  client.setApiKey("hsk_test");
+  await client.creditBalance();
+  assert.equal(calls[0].init.headers["X-API-Key"], "hsk_test");
+});
+
+test("payX402Build maps camelCase -> wire and unwraps groups", async () => {
+  const { client, calls } = stubClient(200, BUILD);
+  const res = await client.payX402Build({
+    invoice: OFFER.accepts[0], userAddress: ADDR,
+    inputs: [{ assetId: 0 }],
+  });
+  const sent = JSON.parse(calls[0].init.body);
+  assert.equal(sent.user_address, ADDR);
+  assert.deepEqual(sent.inputs, [{ asset_id: 0 }]);   // amount omitted
+  assert.equal(res.mode, "swap+pay");
+  assert.deepEqual(res.groups.map((g) => g.purpose), ["swap", "payment"]);
+  assert.deepEqual(res.groups[0].txnsB64, ["AA", "BB"]);
+});
+
+test("payInvoice signs and submits each group IN ORDER", async () => {
+  const { client } = stubClient(200, BUILD);
+  const order = [];
+  const res = await client.payInvoice({
+    invoice: OFFER.accepts[0], userAddress: ADDR,
+    inputs: [{ assetId: 0 }],
+    sign: async (txns, purpose) => { order.push(`sign:${purpose}`); return txns; },
+    submit: async (_signed, purpose) => { order.push(`submit:${purpose}`); return `tx-${purpose}`; },
+  });
+  assert.deepEqual(order,
+    ["sign:swap", "submit:swap", "sign:payment", "submit:payment"]);
+  assert.deepEqual(res.receipts.map((r) => r.result), ["tx-swap", "tx-payment"]);
+});
+
+test("payInvoice demands sign/submit callbacks (non-custodial)", async () => {
+  const { client } = stubClient(200, BUILD);
+  await assert.rejects(
+    async () => client.payInvoice({
+      invoice: OFFER.accepts[0], userAddress: ADDR,
+      inputs: [{ assetId: 0 }],
+    }), VErr);
+});
+
+test("topupWithAssets: offer -> build -> submit -> credits land", async () => {
+  const { client, calls } = seqClient([
+    { status: 200, body: { balance: 0 } },      // balance before
+    { status: 402, body: OFFER },               // offer
+    { status: 200, body: BUILD },               // topup build
+    { status: 200, body: { balance: 1000 } },   // poll: landed
+  ]);
+  const order = [];
+  const res = await client.topupWithAssets({
+    usdcMicro: 1_000_000, userAddress: ADDR, inputs: [{ assetId: 0 }],
+    sign: async (t, p) => { order.push(`sign:${p}`); return t; },
+    submit: async (_s, p) => { order.push(`submit:${p}`); return p; },
+    pollMs: 1,
+  });
+  assert.equal(res.balance, 1000);
+  assert.equal(res.offer.nonce, "nonce-1");
+  assert.deepEqual(order,
+    ["sign:swap", "submit:swap", "sign:payment", "submit:payment"]);
+  assert.match(calls[2].url, /\/credits\/topup\/build$/);
+  assert.equal(JSON.parse(calls[2].init.body).nonce, "nonce-1");
+});
+
+// ── batch lookups (1.1.0) ──────────────────────────────────────────
+
+test("prices/assetsTvl/assets serialize ids as comma lists", async () => {
+  const { client, calls } = stubClient(200, {});
+  await client.prices([0, 31566704]);
+  assert.match(calls[0].url, /\/prices\?ids=0%2C31566704|\/prices\?ids=0,31566704/);
+  await client.assetsTvl([5]);
+  assert.match(calls[1].url, /\/tvl\/assets\?ids=5/);
+  await client.assets({ ids: [1, 2, 3] });
+  assert.match(calls[2].url, /\/assets\?ids=1%2C2%2C3|\/assets\?ids=1,2,3/);
+});
+
+test("ids batches reject empty and >100", async () => {
+  const { client } = stubClient(200, {});
+  await assert.rejects(async () => client.prices([]), VErr);
+  await assert.rejects(
+    async () => client.prices(Array.from({ length: 101 }, (_, i) => i)), VErr);
+});

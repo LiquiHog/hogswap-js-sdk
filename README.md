@@ -122,6 +122,48 @@ Full request/response reference: [`docs/API.md`](docs/API.md).
    delivery fall below it, the group reverts atomically and the user only
    spends network fees.
 
+## x402: paid tier + pay any invoice with any asset (1.1.0)
+
+The SDK speaks [x402](https://hogswap-v1.liquihog.dev/reference) end
+to end, strictly non-custodially — you provide `sign` and `submit`
+callbacks; the SDK never sees keys.
+
+```js
+import { HogswapClient, PaymentRequiredError, USDC } from "hogswap-js-sdk";
+const hogswap = new HogswapClient({ apiKey: "hsk_..." });
+
+// Self-issue a key (no signup, no human): sign a challenge locally.
+const ch = await hogswap.register({ address });
+const { api_key } = await hogswap.registerVerify({
+  address, challenge: ch.challenge, signatureB64: mySignBytes(ch.challenge),
+});
+hogswap.setApiKey(api_key);
+
+// Out of credits? Any call throws PaymentRequiredError whose `.offer`
+// IS the x402 payment instruction. Top up with ANY 1-4 assets you
+// hold (here: minimum ALGO, solved by the exact-out router):
+try { await hogswap.swapQuote({ ... }); }
+catch (e) {
+  if (e instanceof PaymentRequiredError) {
+    await hogswap.topupWithAssets({
+      usdcMicro: 1_000_000, userAddress: address,
+      inputs: [{ assetId: 0 }],          // pay 1 USDC worth of ALGO
+      sign: (txnsB64, purpose) => wallet.signGroup(txnsB64),
+      submit: (signed) => algod.sendRawTransaction(signed).do(),
+    });                                   // resolves when credits land
+    // retry the original call
+  }
+}
+
+// Or pay ANY third-party Algorand x402 invoice the same way:
+await hogswap.payInvoice({ invoice: offer.accepts[0], userAddress: address,
+                           inputs: [{ assetId: 0 }], sign, submit });
+```
+
+Groups are submitted **in order** (swap first — its on-chain floor
+guarantees the payment is funded). AI agents get the same tools over
+MCP: [`hogswap-mcp`](https://github.com/LiquiHog/hogswap-mcp).
+
 ## Being a good API citizen (limits)
 
 | Limit | Value | On violation |

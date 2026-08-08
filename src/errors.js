@@ -54,6 +54,21 @@ export class QuoteExpiredError extends HogswapError {}
  */
 export class ExecuteBudgetError extends HogswapError {}
 
+/**
+ * HTTP 402 — payment required. The body IS the x402 offer: an
+ * `accepts` array of payment options (plus `nonce` /
+ * `credits_granted` on credit top-ups). Not a dead end — pay any
+ * entry with `client.payInvoice(...)` or top up credits with
+ * `client.topupWithAssets(...)`, then retry.
+ */
+export class PaymentRequiredError extends HogswapError {
+  constructor(message, opts = {}) {
+    super(message, opts);
+    /** The x402 offer body (`x402_version`, `accepts`, ...). */
+    this.offer = opts.offer ?? null;
+  }
+}
+
 /** HTTP 400/422 — the request shape or values were rejected. */
 export class ValidationError extends HogswapError {}
 
