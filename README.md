@@ -162,7 +162,9 @@ await hogswap.payInvoice({ invoice: offer.accepts[0], userAddress: address,
 
 Groups are submitted **in order** (swap first — its on-chain floor
 guarantees the payment is funded). AI agents get the same tools over
-MCP: [`hogswap-mcp`](https://github.com/LiquiHog/hogswap-mcp).
+MCP: [`hogswap-mcp`](https://github.com/LiquiHog/hogswap-mcp); Python
+apps get [`hogswap-py-sdk`](https://github.com/LiquiHog/hogswap-py-sdk)
+(`pip install hogswap-py-sdk`).
 
 ## Being a good API citizen (limits)
 
