@@ -322,3 +322,92 @@ test("ids batches reject empty and >100", async () => {
   await assert.rejects(
     async () => client.prices(Array.from({ length: 101 }, (_, i) => i)), VErr);
 });
+
+// ── maxLegs: caller-capped route complexity (1.2.0) ────────────────
+
+test("maxLegs rides the wire only when given, with bounds", async () => {
+  const { client, calls } = stubClient(200, {});
+  await client.swapQuote({ assetIn: 0, assetOut: 1, amountIn: 5 });
+  assert.equal("max_legs" in JSON.parse(calls[0].init.body), false);
+  await client.swapQuote({ assetIn: 0, assetOut: 1, amountIn: 5, maxLegs: 3 });
+  assert.equal(JSON.parse(calls[1].init.body).max_legs, 3);
+  await assert.rejects(
+    async () => client.swapQuote({ assetIn: 0, assetOut: 1, amountIn: 5,
+                                   maxLegs: 0 }), VErr);
+  await assert.rejects(
+    async () => client.swapQuote({ assetIn: 0, assetOut: 1, amountIn: 5,
+                                   maxLegs: 17 }), VErr);
+});
+
+// ── watches (1.2.0) ────────────────────────────────────────────────
+
+test("putWatch maps camelCase -> wire for both kinds", async () => {
+  const { client, calls } = stubClient(200, { watch: {} });
+  await client.putWatch({
+    clientKey: "v:1", kind: "target", assetIn: 0, assetOut: 31566704,
+    amountIn: 1_000_000, minOut: 900_000, rearmBps: 40, cooldownS: 60,
+  });
+  const sent = JSON.parse(calls[0].init.body);
+  assert.equal(sent.client_key, "v:1");
+  assert.equal(sent.asset_in, 0);
+  assert.equal(sent.min_out, 900_000);
+  assert.equal(sent.rearm_bps, 40);
+  assert.equal(sent.cooldown_s, 60);
+  assert.equal("margin_bps" in sent, false);   // server default applies
+  await client.putWatch({
+    clientKey: "p:1", kind: "price", assetId: 0, op: "gte",
+    thresholdUsdMicro: 250_000,
+  });
+  const sent2 = JSON.parse(calls[1].init.body);
+  assert.equal(sent2.threshold_usd_micro, 250_000);
+  assert.equal(sent2.op, "gte");
+  await assert.rejects(
+    async () => client.putWatch({ clientKey: "x", kind: "nope" }), VErr);
+  await assert.rejects(async () => client.putWatch({ kind: "price" }), VErr);
+});
+
+test("deleteWatch hits the escaped path with DELETE", async () => {
+  const { client, calls } = stubClient(200, { deleted: "a b" });
+  await client.deleteWatch("a b");
+  assert.match(calls[0].url, /\/watches\/a%20b$/);
+  assert.equal(calls[0].init.method, "DELETE");
+});
+
+test("watchEvents parses SSE frames, skips keepalives, needs apiKey", async () => {
+  const frames = [
+    'event: hello\ndata: {"type":"hello","seq":2}\n\n: ka\n\n',
+    'id: 3\nevent: watch\ndata: {"type":"fired","seq":3,"client_key":"v:1"}\n\n',
+  ];
+  const chunks = frames.map((f) => new TextEncoder().encode(f));
+  const client = new HogswapClient({
+    apiKey: "hsk_test",
+    fetch: async (url, init) => {
+      assert.match(url, /\/watches\/stream\?since_seq=1$/);
+      assert.equal(init.headers["X-API-Key"], "hsk_test");
+      return {
+        ok: true, status: 200,
+        body: { getReader: () => ({
+          read: async () => chunks.length
+            ? { done: false, value: chunks.shift() }
+            : { done: true, value: undefined },
+          releaseLock: () => {},
+        }) },
+      };
+    },
+  });
+  const seen = [];
+  for await (const ev of client.watchEvents({ sinceSeq: 1 })) seen.push(ev);
+  assert.deepEqual(seen.map((e) => e.seq), [2, 3]);
+  assert.equal(seen[1].client_key, "v:1");
+
+  const bare = new HogswapClient({ fetch: async () => ({}) });
+  await assert.rejects(async () => bare.watchEvents().next(), VErr);
+});
+
+test("watchStreamUrl carries key and since_seq", async () => {
+  const client = new HogswapClient({ apiKey: "hsk_url" });
+  const url = client.watchStreamUrl({ sinceSeq: 7 });
+  assert.match(url, /\/watches\/stream\?/);
+  assert.match(url, /key=hsk_url/);
+  assert.match(url, /since_seq=7/);
+});

@@ -28,6 +28,7 @@ One endpoint, several modes. Common optional fields for every mode:
 | `sender` | string | — | wallet that will sign; prices its HOG fee discount exactly. Recommended whenever a wallet is connected. |
 | `slippage_bps` | int | 50 (100 LP) | tolerance in basis points, 1-5000 |
 | `max_hops` | int | 3 | 1-4 intermediate assets — SWAP-family modes only; LP modes route their conversion legs with a fixed internal depth and ignore this field |
+| `max_legs` | int | — | caller-capped route complexity (1-16): bound the TOTAL leg count, parallel pool splits included (`max_hops` bounds DEPTH only). For callers that replay the session under their own resource budget (contract vaults, composed groups). The planner re-solves to fit — slightly worse price at size; 404 when nothing fits. Plain forward SWAP only (422 with exact-out/multi-input/basket/cover_algo_fee/LP). |
 
 ### Swap (default mode)
 
@@ -198,3 +199,40 @@ non-custodial and never sees keys. Never pass a mnemonic anywhere.
 
 EVM-settled invoices are rejected with HTTP 400 (no bridge; Algorand
 -settled x402 only).
+
+## Watches — standing conditions + per-key SSE alerts (1.2.0)
+
+Register a condition once, hold ONE outbound SSE connection, get
+pushed an event the block it arms — stop polling. Requires an API key
+(self-issue via `register`/`registerVerify`); watches are **free**
+and never consume credits. Quota: 1,000 active watches per key.
+
+| Endpoint | SDK method | Notes |
+|---|---|---|
+| `POST /watches` | `putWatch({...})` | idempotent upsert by `clientKey`; replacing resets arming |
+| `GET /watches` | `watches()` | this key's watches + `latest_seq` |
+| `DELETE /watches/{client_key}` | `deleteWatch(clientKey)` | |
+| `GET /watches/stream` | `watchEvents({ sinceSeq })` | SSE; `?since_seq=` / `Last-Event-ID` replay |
+
+**Kinds:** `target` (size-aware): fires when the estimated output for
+`amount_in` of `asset_in`→`asset_out` — per-block analytics prices
+minus a disclosed `margin_bps` haircut (default 30) — crosses
+`min_out`. `price` (advisory): fires when the asset's µUSD price
+crosses `threshold_usd_micro` in direction `op` (`gte`/`lte`).
+
+**Arming:** edge-triggered one-shot; re-arms only after a `rearm_bps`
+retreat (default 25) AND `cooldown_s` elapsed (default 0). `ttl_s`
+(default 86400, 60–604800) auto-expires the watch — refresh by
+re-upserting.
+
+**Stream semantics:** events carry per-key `seq` numbers; every
+stream opens with `{type:"hello", seq}` — a hello seq LOWER than the
+last one you processed means the backend restarted (the in-memory
+replay ring is fresh): reconcile via `GET /watches`. Keepalive
+comment every ~15s. Delivery is AT-LEAST-ONCE — de-duplicate by
+`seq`.
+
+**Events are hints.** `{type:"fired", client_key, kind, round,
+observed:{...}}` carries numbers only — no quote is run or attached.
+Re-quote at fire time (`quote late, crank now`); delivery is still
+gated by your quote's on-chain floor.

@@ -95,6 +95,40 @@ Market data (all edge-cached ~5s): `assets`, `asset`, `assetPools`, `pools`,
 `pool`, `stammPools`, `pair`, `price`, `priceAnchors`, `stakingAssets`,
 `tvl`, `health`.
 
+**Bounded-complexity routes (1.2.0):** pass `maxLegs` (1-16) to
+`swapQuote` to cap the TOTAL leg count, parallel pool splits included —
+`maxHops` bounds depth only. Built for callers that replay the session
+under their own resource budget (contract vaults, composed groups):
+you get the best route *that fits*, at a slightly worse price, instead
+of a rejection.
+
+## Watches: server-side arming over SSE (1.2.0)
+
+Stop polling for prices: register a standing condition once and get
+pushed an event the block it arms. Free with any self-issued API key.
+
+```js
+const hogswap = new HogswapClient({ apiKey: "hsk_..." });
+
+// "Tell me when swapping 100 ALGO would deliver ≥ 8.65 USDC."
+await hogswap.putWatch({
+  clientKey: "my-bot:algo-usdc", kind: "target",
+  assetIn: 0, assetOut: 31566704,
+  amountIn: 100_000_000, minOut: 8_650_000,
+});
+
+for await (const ev of hogswap.watchEvents()) {
+  if (ev.type === "fired") {
+    // numbers only — re-quote NOW, then execute (quote late, crank now)
+  }
+}
+```
+
+Edge-triggered with per-watch re-arm hysteresis and cooldown; TTL
+auto-expiry; at-least-once delivery with seq-numbered replay. Events
+are hints — fills stay gated by your quote's on-chain floor. Details:
+[`docs/API.md`](docs/API.md).
+
 **Live block stream** — the one endpoint without a wrapper method: it's
 plain Server-Sent Events:
 

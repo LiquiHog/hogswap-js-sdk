@@ -70,20 +70,28 @@ export class HogswapClient {
    * @param {number} [p.maxHops=3]
    * @param {boolean} [p.coverAlgoFee=false] deliver an ALGO rebate
    *   covering network fees alongside the output
+   * @param {number} [p.maxLegs] caller-capped route complexity
+   *   (1-16): bound the TOTAL leg count, parallel pool splits
+   *   included — maxHops bounds path DEPTH only. For callers that
+   *   replay the session under their own resource budget (contract
+   *   vaults, composed groups). The planner re-solves to fit, so
+   *   expect a slightly worse price at size; 404 when nothing fits.
    * @param {string} [p.sender] overrides the client default
    * @returns {Promise<object>} quote response (see docs/API.md) —
    *   `expected_out` / `min_out_at_slippage` are what the contract
    *   actually delivers (routing fee already included).
    */
-  swapQuote({ assetIn, assetOut, amountIn, slippageBps = 50, maxHops = 3, coverAlgoFee = false, sender } = {}) {
-    return this._quote({
+  swapQuote({ assetIn, assetOut, amountIn, slippageBps = 50, maxHops = 3, coverAlgoFee = false, maxLegs, sender } = {}) {
+    const body = {
       asset_in: _int(assetIn, "assetIn"),
       asset_out: _int(assetOut, "assetOut"),
       amount_in: _int(amountIn, "amountIn"),
       slippage_bps: _bps(slippageBps),
       max_hops: _hops(maxHops),
       cover_algo_fee: coverAlgoFee,
-    }, sender);
+    };
+    if (maxLegs != null) body.max_legs = _legs(maxLegs);
+    return this._quote(body, sender);
   }
 
   /**
@@ -486,6 +494,146 @@ export class HogswapClient {
   /** Protocol-wide TVL. */
   tvl() { return this._get("/tvl"); }
 
+  // ── watches: standing conditions + per-key SSE alerts (1.2.0) ───
+  //
+  // Register a condition once, hold ONE outbound SSE connection, get
+  // pushed an event the block it arms — stop polling. Requires an
+  // apiKey (self-issue via register/registerVerify); watches are
+  // FREE and never consume credits. Events are HINTS (numbers only,
+  // no quote attached): re-quote at fire time — delivery is still
+  // gated by your quote's on-chain floor.
+
+  /**
+   * Register or REPLACE a watch — idempotent upsert by `clientKey`
+   * (replacing resets its arming state).
+   *
+   * Kinds:
+   *  - `target` (size-aware): fires when the estimated output for
+   *    `amountIn` of assetIn→assetOut — from per-block analytics
+   *    prices minus the disclosed `marginBps` haircut (default 30) —
+   *    crosses `minOut`.
+   *  - `price` (advisory): fires when the asset's µUSD price crosses
+   *    `thresholdUsdMicro` in direction `op` ("gte" | "lte").
+   *
+   * Arming: edge-triggered one-shot; re-arms only after a `rearmBps`
+   * retreat (default 25) AND `cooldownS` elapsed (default 0). `ttlS`
+   * (default 86400, max 7d) auto-expires the watch — refresh by
+   * re-upserting.
+   */
+  putWatch({ clientKey, kind, assetIn, assetOut, amountIn, minOut,
+             marginBps, assetId, op, thresholdUsdMicro,
+             rearmBps, cooldownS, ttlS } = {}) {
+    if (!clientKey || typeof clientKey !== "string") {
+      throw new ValidationError("putWatch() requires clientKey");
+    }
+    const body = { client_key: clientKey, kind };
+    if (kind === "target") {
+      body.asset_in = _int(assetIn, "assetIn");
+      body.asset_out = _int(assetOut, "assetOut");
+      body.amount_in = _int(amountIn, "amountIn");
+      body.min_out = _int(minOut, "minOut");
+    } else if (kind === "price") {
+      body.asset_id = _int(assetId, "assetId");
+      body.op = op;
+      body.threshold_usd_micro = _int(thresholdUsdMicro, "thresholdUsdMicro");
+    } else {
+      throw new ValidationError('putWatch() kind must be "target" or "price"');
+    }
+    if (marginBps != null) body.margin_bps = _int(marginBps, "marginBps");
+    if (rearmBps != null) body.rearm_bps = _int(rearmBps, "rearmBps");
+    if (cooldownS != null) body.cooldown_s = _int(cooldownS, "cooldownS");
+    if (ttlS != null) body.ttl_s = _int(ttlS, "ttlS");
+    return this._post("/watches", body);
+  }
+
+  /** This key's watches + `latest_seq` (stream reconciliation). */
+  watches() { return this._get("/watches"); }
+
+  /** Delete a watch by its clientKey. */
+  deleteWatch(clientKey) {
+    if (!clientKey || typeof clientKey !== "string") {
+      throw new ValidationError("deleteWatch() requires clientKey");
+    }
+    return this._request(
+      `/watches/${encodeURIComponent(clientKey)}`, { method: "DELETE" });
+  }
+
+  /**
+   * Consume the per-key SSE alert stream as an async iterator of
+   * parsed events. The first event is `{type:"hello", seq}` — if its
+   * seq is LOWER than the last one you processed, the backend
+   * restarted (the replay ring is fresh): reconcile via `watches()`.
+   * Delivery is AT-LEAST-ONCE — de-duplicate by `seq`.
+   *
+   *   for await (const ev of hogswap.watchEvents({ sinceSeq })) {
+   *     if (ev.type === "fired") crank(ev);
+   *   }
+   *
+   * @param {object} [p]
+   * @param {number} [p.sinceSeq] replay events after this seq first
+   * @param {AbortSignal} [p.signal] abort to end the iteration
+   */
+  async *watchEvents({ sinceSeq, signal } = {}) {
+    if (!this.apiKey) {
+      throw new ValidationError(
+        "watchEvents() requires an apiKey (watches are per-key)");
+    }
+    const qs = sinceSeq != null
+      ? `?since_seq=${_int(sinceSeq, "sinceSeq")}` : "";
+    let res;
+    try {
+      res = await this._fetch(`${this.baseUrl}/watches/stream${qs}`, {
+        method: "GET",
+        headers: { "X-API-Key": this.apiKey, Accept: "text/event-stream" },
+        signal,
+      });
+    } catch (cause) {
+      throw new NetworkError(
+        `request to /watches/stream failed: ${cause?.message ?? cause}`);
+    }
+    if (!res.ok || !res.body) {
+      throw new ApiError(`watch stream refused: HTTP ${res.status}`,
+                         { status: res.status });
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const data = frame.split("\n")
+            .filter((l) => l.startsWith("data: "))
+            .map((l) => l.slice(6)).join("\n");
+          if (!data) continue;               // ": ka" keepalive comment
+          try { yield JSON.parse(data); } catch { /* skip junk frame */ }
+        }
+      }
+    } finally {
+      try { reader.releaseLock(); } catch { /* already released */ }
+    }
+  }
+
+  /**
+   * Stream URL for native `EventSource` (which cannot set headers, so
+   * the key rides `?key=` — prefer `watchEvents()` wherever fetch
+   * streaming is available; only use this where EventSource is the
+   * sole option and the URL won't be logged).
+   */
+  watchStreamUrl({ sinceSeq } = {}) {
+    if (!this.apiKey) {
+      throw new ValidationError("watchStreamUrl() requires an apiKey");
+    }
+    const qs = new URLSearchParams({ key: this.apiKey });
+    if (sinceSeq != null) qs.set("since_seq", String(_int(sinceSeq, "sinceSeq")));
+    return `${this.baseUrl}/watches/stream?${qs.toString()}`;
+  }
+
   // ── internals ────────────────────────────────────────────────────
 
   _quote(body, senderOverride) {
@@ -620,6 +768,14 @@ function _hops(v) {
   const n = _int(v, "maxHops");
   if (n < 1 || n > 4) {
     throw new ValidationError(`maxHops must be 1-4, got ${n}`);
+  }
+  return n;
+}
+
+function _legs(v) {
+  const n = _int(v, "maxLegs");
+  if (n < 1 || n > 16) {
+    throw new ValidationError(`maxLegs must be 1-16, got ${n}`);
   }
   return n;
 }

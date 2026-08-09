@@ -84,6 +84,24 @@ export type SubmitGroupFn = (signed: unknown, purpose: string) => unknown | Prom
 
 export interface GroupReceipt { purpose: string; result: unknown; }
 
+// ── watches (1.2.0) ────────────────────────────────────────────────
+
+export interface WatchEvent {
+  /** "hello" opens every stream (carries the current seq — LOWER than
+   * you last saw ⇒ backend restarted, reconcile via watches());
+   * "fired" is a triggered watch. At-least-once — dedupe by seq. */
+  type: "hello" | "fired";
+  seq: number;
+  client_key?: string;
+  kind?: "target" | "price";
+  round?: number;
+  fired_unix?: number;
+  /** Numbers only — no quote attached; re-quote at fire time. */
+  observed?: Record<string, unknown>;
+  watches?: number;
+  [key: string]: unknown;
+}
+
 // ── wire shapes (partial but stable) ───────────────────────────────
 
 export interface LegResponse {
@@ -166,7 +184,10 @@ export declare class HogswapClient {
 
   swapQuote(p: {
     assetIn: number; assetOut: number; amountIn: number | bigint;
-    slippageBps?: number; maxHops?: number; coverAlgoFee?: boolean; sender?: string;
+    slippageBps?: number; maxHops?: number; coverAlgoFee?: boolean;
+    /** Cap TOTAL route legs incl. parallel splits (1-16); maxHops
+     * bounds depth only. Slightly worse price; 404 if nothing fits. */
+    maxLegs?: number; sender?: string;
   }): Promise<QuoteResponse>;
 
   exactOutQuote(p: {
@@ -225,6 +246,23 @@ export declare class HogswapClient {
     inputs: PayInput[]; sign: SignGroupFn; submit: SubmitGroupFn;
     waitForCredits?: boolean; timeoutMs?: number; pollMs?: number }):
     Promise<{ offer: X402Offer; receipts: GroupReceipt[]; balance: number | null }>;
+
+  // ── watches: standing conditions + per-key SSE alerts (1.2.0) ──
+  putWatch(p: {
+    clientKey: string; kind: "target" | "price";
+    assetIn?: number; assetOut?: number; amountIn?: number | bigint;
+    minOut?: number | bigint; marginBps?: number;
+    assetId?: number; op?: "gte" | "lte";
+    thresholdUsdMicro?: number | bigint;
+    rearmBps?: number; cooldownS?: number; ttlS?: number;
+  }): Promise<{ watch: Record<string, unknown>; active: number;
+                quota: number }>;
+  watches(): Promise<{ watches: Record<string, unknown>[]; count: number;
+                       quota: number; latest_seq: number }>;
+  deleteWatch(clientKey: string): Promise<{ deleted: string }>;
+  watchEvents(p?: { sinceSeq?: number; signal?: AbortSignal }):
+    AsyncGenerator<WatchEvent>;
+  watchStreamUrl(p?: { sinceSeq?: number }): string;
 
   health(): Promise<Record<string, unknown>>;
   assets(p?: { limit?: number; cursor?: string; q?: string; ids?: number[] }):
