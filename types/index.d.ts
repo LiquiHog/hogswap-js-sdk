@@ -274,6 +274,9 @@ export declare class HogswapClient {
   pools(params?: Record<string, unknown>): Promise<Record<string, unknown>>;
   pool(poolId: number): Promise<Record<string, unknown>>;
   stammPools(): Promise<Record<string, unknown>>;
+  /** Value an LP position; `amount` is in LP BASE units. */
+  lp(assetId: number, opts?: { amount?: number }):
+    Promise<Record<string, unknown>>;
   pair(assetA: number, assetB: number): Promise<Record<string, unknown>>;
   price(assetId: number): Promise<Record<string, unknown>>;
   priceAnchors(): Promise<Record<string, unknown>>;

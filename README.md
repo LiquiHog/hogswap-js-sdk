@@ -92,8 +92,18 @@ also works, or vendor `src/` — it's dependency-free ES modules.
 | `swap` | quote + execute in one call |
 
 Market data (all edge-cached ~5s): `assets`, `asset`, `assetPools`, `pools`,
-`pool`, `stammPools`, `pair`, `price`, `priceAnchors`, `stakingAssets`,
-`tvl`, `health`.
+`pool`, `stammPools`, `lp`, `pair`, `price`, `priceAnchors`,
+`stakingAssets`, `tvl`, `health`.
+
+**LP positions (1.3.0):** `lp(assetId, { amount })` values a
+liquidity-provider token — which pool and STAMM tier issued it, what
+one WHOLE token is backed by, its USD value, and the redeemable
+amount of each underlying for a given holding (`amount` is in LP base
+units). Find ids on `pools()[].lp_asset_id` or, for STAMM, on each
+`stammPools()[].tier_breakdown[].lp_asset_id`. Values are a
+proportional-share redemption at analytics prices — no slippage, no
+exit fee, and null rather than guessed when a price or supply is
+missing.
 
 **Bounded-complexity routes (1.2.0):** pass `maxLegs` (1-16) to
 `swapQuote` to cap the TOTAL leg count, parallel pool splits included —

@@ -477,6 +477,23 @@ export class HogswapClient {
   /** STAMM pools with per-tier state (for LP flows). */
   stammPools() { return this._get("/stamm/pools"); }
 
+  /**
+   * Value an LP position (1.3.0). Give the LP token's asset id and,
+   * optionally, `amount` in LP BASE units (what the account holds) to
+   * get its USD value and the redeemable amounts of each underlying.
+   *
+   * Per-unit figures are per WHOLE LP token. Values are a
+   * proportional-share redemption at analytics prices — no slippage,
+   * no exit fee, and not a market quote. Fields come back null rather
+   * than guessed when supply or a reserve price is unavailable, so
+   * check them before displaying. 404 if the asset isn't an LP token;
+   * find ids via `pools()[].lp_asset_id` or, for STAMM, each
+   * `stammPools()[].tier_breakdown[].lp_asset_id`.
+   */
+  lp(assetId, { amount } = {}) {
+    return this._get(`/lp/${_int(assetId, "assetId")}`, { amount });
+  }
+
   /** Pair-level view between two assets. */
   pair(assetA, assetB) {
     return this._get(`/pairs/${_int(assetA, "assetA")}/${_int(assetB, "assetB")}`);
