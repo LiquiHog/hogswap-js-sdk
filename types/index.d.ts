@@ -21,13 +21,23 @@ export declare function fromBaseUnits(baseUnits: number | bigint | string, decim
 
 export declare class HogswapError extends Error {
   status: number;
+  /** Human-readable sentence from the API's `detail`. */
   detail: unknown;
+  /** Stable machine code from the API's `error` field, e.g.
+   * "missing_opt_in". Null on responses that predate it — branch on
+   * this rather than on `detail`, whose wording may change. */
+  code: string | null;
+  /** Asset ids the error refers to, when supplied. */
+  assets: number[] | null;
 }
 export declare class NetworkError extends HogswapError {}
 export declare class RateLimitError extends HogswapError { retryAfterSeconds: number; }
 export declare class QuoteExpiredError extends HogswapError {}
 export declare class ExecuteBudgetError extends HogswapError {}
 export declare class ValidationError extends HogswapError {}
+/** 422 `missing_opt_in` — signer lacks an OUTPUT asset opt-in; ids on
+ * `.assets`. Subclasses ValidationError, so existing catches still work. */
+export declare class MissingOptInError extends ValidationError {}
 export declare class NoRouteError extends HogswapError {}
 export declare class NotFoundError extends HogswapError {}
 export declare class ApiError extends HogswapError {}
@@ -128,6 +138,24 @@ export interface QuoteResponse {
   legs: LegResponse[];
   network_fee_microalgo: number;
   requested_out?: number;
+  /** Exact-out only: worst-case INPUT at slippage_bps. In exact-out the
+   * min-out side is pinned to amount_out, so this is the bound that
+   * matters. */
+  max_in_at_slippage?: number;
+  /** Routing fee ALREADY deducted from expected_out — for display, not
+   * arithmetic. Denominated in router_fee_asset (always the output). */
+  router_fee_bps_nominal?: number;
+  router_fee_bps_effective?: number;
+  router_fee_amount?: number;
+  /** What the fee would have been with zero HOG. Subtract
+   * router_fee_amount for a "you saved X" figure. */
+  router_fee_amount_undiscounted?: number;
+  router_fee_asset?: number | null;
+  /** Null unless `sender` was supplied — the contract charges on the
+   * eventual signer's holdings, which cannot be known without one. */
+  hog_holdings_micro?: number | null;
+  /** 0-100, proportional. 100 = fee fully waived. */
+  hog_discount_pct?: number | null;
   mode?: string;
   lp?: {
     mode: string;

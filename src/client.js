@@ -24,6 +24,7 @@ import {
   QuoteExpiredError,
   RateLimitError,
   ValidationError,
+  MissingOptInError,
 } from "./errors.js";
 
 export class HogswapClient {
@@ -695,7 +696,13 @@ export class HogswapClient {
 
     const detail = payload?.detail ?? payload;
     const msg = typeof detail === "string" ? detail : JSON.stringify(detail ?? res.statusText);
-    const opts = { status: res.status, detail };
+    // Machine-readable siblings the API adds next to `detail`
+    // (2026-08-10). Absent on older responses -> null.
+    const code = (payload && typeof payload === "object")
+      ? (payload.error ?? null) : null;
+    const assets = (payload && typeof payload === "object")
+      ? (payload.assets ?? null) : null;
+    const opts = { status: res.status, detail, code, assets };
     if (res.status === 402) {
       // The body IS the x402 offer — carry it whole so callers can
       // pay it (payInvoice / topupWithAssets) and retry.
@@ -719,6 +726,7 @@ export class HogswapClient {
       throw new NotFoundError(msg, opts);   // unknown asset/pool/pair
     }
     if (res.status === 400 || res.status === 422) {
+      if (code === "missing_opt_in") throw new MissingOptInError(msg, opts);
       throw new ValidationError(msg, opts);
     }
     throw new ApiError(msg, opts);

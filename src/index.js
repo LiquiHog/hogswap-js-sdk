@@ -17,6 +17,7 @@ export {
   QuoteExpiredError,
   ExecuteBudgetError,
   ValidationError,
+  MissingOptInError,
   NoRouteError,
   NotFoundError,
   ApiError,

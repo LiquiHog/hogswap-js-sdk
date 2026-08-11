@@ -13,13 +13,20 @@
 
 /** Base class for every error this SDK throws. */
 export class HogswapError extends Error {
-  constructor(message, { status = 0, detail = null } = {}) {
+  constructor(message, { status = 0, detail = null, code = null,
+                         assets = null } = {}) {
     super(message);
     this.name = new.target.name;
     /** HTTP status code (0 for network-level failures). */
     this.status = status;
-    /** The API's `detail` payload, when present. */
+    /** The API's `detail` payload — a human-readable sentence. */
     this.detail = detail;
+    /** Stable machine code from the API's `error` field, when present
+     * (e.g. "missing_opt_in"). Branch on this rather than on `detail`,
+     * whose wording may change. Null on responses that predate it. */
+    this.code = code;
+    /** Asset ids the error refers to, when the API supplies them. */
+    this.assets = assets;
   }
 }
 
@@ -71,6 +78,16 @@ export class PaymentRequiredError extends HogswapError {
 
 /** HTTP 400/422 — the request shape or values were rejected. */
 export class ValidationError extends HogswapError {}
+
+/**
+ * HTTP 422 with `error: "missing_opt_in"` — the signer has not opted
+ * into one or more OUTPUT assets, so the group cannot be built. The
+ * ids are on `.assets`; opt in, then request a fresh quote.
+ *
+ * Subclasses ValidationError so existing `catch (ValidationError)`
+ * keeps working unchanged.
+ */
+export class MissingOptInError extends ValidationError {}
 
 /** No viable route / target not achievable (HTTP 404 on quotes). */
 export class NoRouteError extends HogswapError {}

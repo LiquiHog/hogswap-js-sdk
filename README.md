@@ -95,6 +95,27 @@ Market data (all edge-cached ~5s): `assets`, `asset`, `assetPools`, `pools`,
 `pool`, `stammPools`, `lp`, `pair`, `price`, `priceAnchors`,
 `stakingAssets`, `tvl`, `health`.
 
+**Routing fee, surfaced (1.4.0):** every SWAP quote now carries
+`router_fee_bps_nominal` / `_effective`, `router_fee_amount` (already
+deducted from `expected_out` — display it, don't subtract it),
+`router_fee_amount_undiscounted`, and `router_fee_asset` (always the
+output asset). Pass a `sender` and you also get `hog_holdings_micro`
+and `hog_discount_pct`; "you saved" is
+`router_fee_amount_undiscounted - router_fee_amount`. The fee is 5 bps
+of notional output, reduced proportionally by HOG held and fully
+waived at 100 HOG.
+
+**Exact-out bound (1.4.0):** `exactOutQuote` responses add
+`max_in_at_slippage` — the worst-case spend. In exact-out mode the
+min-out side is pinned to `amount_out`, so the input is the bound that
+matters.
+
+**`MissingOptInError` (1.4.0):** 422s where the signer lacks an OUTPUT
+asset opt-in now throw this instead of a bare `ValidationError` (which
+it subclasses, so existing catches still work). The ids are on
+`.assets`, and every error now carries `.code` — the API's stable
+machine code — alongside the human `.detail`.
+
 **LP positions (1.3.0):** `lp(assetId, { amount })` values a
 liquidity-provider token — which pool and STAMM tier issued it, what
 one WHOLE token is backed by, its USD value, and the redeemable

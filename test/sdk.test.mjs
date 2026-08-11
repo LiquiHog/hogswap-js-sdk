@@ -4,6 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as errors from "../src/errors.js";
 
 import {
   HogswapClient,
@@ -410,4 +411,30 @@ test("watchStreamUrl carries key and since_seq", async () => {
   assert.match(url, /\/watches\/stream\?/);
   assert.match(url, /key=hsk_url/);
   assert.match(url, /since_seq=7/);
+});
+
+test("errors carry the API's machine code and asset ids (1.4.0)", () => {
+  // The API adds `error` / `assets` next to `detail`; every subclass
+  // must forward them through the options bag.
+  for (const C of [errors.RateLimitError, errors.PaymentRequiredError,
+                   errors.ApiError, errors.ValidationError,
+                   errors.MissingOptInError, errors.NotFoundError]) {
+    const e = new C("m", { status: 422, detail: "d", code: "x", assets: [1] });
+    assert.equal(e.code, "x");
+    assert.deepEqual(e.assets, [1]);
+  }
+});
+
+test("MissingOptInError subclasses ValidationError so old catches work", () => {
+  const e = new errors.MissingOptInError("m", {
+    status: 422, code: "missing_opt_in", assets: [31566704] });
+  assert.ok(e instanceof errors.ValidationError);
+  assert.ok(e instanceof errors.HogswapError);
+  assert.deepEqual(e.assets, [31566704]);
+});
+
+test("code/assets default to null on responses that predate them", () => {
+  const e = new errors.ApiError("m", { status: 500, detail: "boom" });
+  assert.equal(e.code, null);
+  assert.equal(e.assets, null);
 });
